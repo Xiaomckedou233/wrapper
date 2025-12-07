@@ -11,82 +11,82 @@ jobs:
     strategy:
       matrix:
         build_type: [Release, Debug]
-    
+
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Android NDK r23b
-      run: |
-        $ndkUrl = "https://dl.google.com/android/repository/android-ndk-r23b-windows.zip"
-        $ndkZip = "android-ndk-r23b-windows.zip"
-        
-        Write-Host "Downloading Android NDK r23b..."
-        Invoke-WebRequest -Uri $ndkUrl -OutFile $ndkZip
-        
-        Write-Host "Extracting Android NDK r23b..."
-        Expand-Archive -Path $ndkZip -DestinationPath $env:USERPROFILE -Force
-        
-        Write-Host "NDK installed at: $env:USERPROFILE\android-ndk-r23b"
-        
-    - name: Set up CMake
-      uses: jwlawson/actions-setup-cmake@v2
-      with:
-        cmake-version: '3.25.x'
-        
-    - name: Configure CMake
-      run: |
-        mkdir build
-        cd build
-        cmake .. -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-      
-    - name: Build
-      run: |
-        cd build
-        cmake --build . --config ${{ matrix.build_type }}
-        
-    - name: Verify build outputs
-      run: |
-        Write-Host "Checking for build outputs..."
-        if (Test-Path "rootfs\system\bin\main") {
-          Write-Host "main binary found"
-        } else {
-          Write-Host "Warning: main binary not found"
-        }
-        if (Test-Path "wrapper.exe") {
-          Write-Host "wrapper.exe binary found"
-        } else {
-          Write-Host "Warning: wrapper.exe binary not found"
-        }
+      - name: Set up Android NDK r23b
+        run: |
+          $ndkUrl = "https://dl.google.com/android/repository/android-ndk-r23b-windows.zip"
+          $ndkZip = "android-ndk-r23b-windows.zip"
 
-    - name: Set outputs
-      id: vars
-      run: |
-        $shortSha = git rev-parse --short HEAD
-        echo "sha_short=$shortSha" >> $env:GITHUB_OUTPUT
+          Write-Host "Downloading Android NDK r23b..."
+          Invoke-WebRequest -Uri $ndkUrl -OutFile $ndkZip
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}
-        include-hidden-files: true
-        path: |
-          rootfs
-          wrapper.exe
-          Dockerfile
+          Write-Host "Extracting Android NDK r23b..."
+          Expand-Archive -Path $ndkZip -DestinationPath $env:USERPROFILE -Force
 
-    - name: Create Release Zip File
-      if: matrix.build_type == 'Release'
-      run: |
-        Compress-Archive -Path rootfs\, wrapper.exe, Dockerfile -DestinationPath Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}.zip
-      
-    - name: Create Release
-      if: matrix.build_type == 'Release'
-      uses: softprops/action-gh-release@v2
-      with:
-        files: Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}.zip
-        body: ${{ github.event.head_commit.message }}
-        name: Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}
-        tag_name: Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}
-        make_latest: false
+          Write-Host "NDK installed at: $env:USERPROFILE\android-ndk-r23b"
+
+      - name: Set up CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.25.x'
+
+      - name: Configure CMake
+        run: |
+          mkdir build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+
+      - name: Build
+        run: |
+          cd build
+          cmake --build . --config ${{ matrix.build_type }}
+
+      - name: Verify build outputs
+        run: |
+          Write-Host "Checking for build outputs..."
+          if (Test-Path "rootfs\system\bin\main") {
+            Write-Host "main binary found"
+          } else {
+            Write-Host "Warning: main binary not found"
+          }
+          if (Test-Path "wrapper.exe") {
+            Write-Host "wrapper.exe binary found"
+          } else {
+            Write-Host "Warning: wrapper.exe binary not found"
+          }
+
+      - name: Set outputs
+        id: vars
+        run: |
+          $shortSha = git rev-parse --short HEAD
+          echo "sha_short=$shortSha" >> $env:GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}
+          include-hidden-files: true
+          path: |
+            rootfs
+            wrapper.exe
+            Dockerfile
+
+      - name: Create Release Zip File
+        if: matrix.build_type == 'Release'
+        run: |
+          Compress-Archive -Path rootfs\, wrapper.exe, Dockerfile -DestinationPath Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}.zip
+
+      - name: Create Release
+        if: matrix.build_type == 'Release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}.zip
+          body: ${{ github.event.head_commit.message }}
+          name: Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}
+          tag_name: Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}
+          make_latest: false
