@@ -6,12 +6,31 @@ include(ExternalProject)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_CXX_STANDARD 11)
 
-set(ANDROID_NDK_PATH "$ENV{HOME}/android-ndk-r23b")
-set(TOOLCHAIN "${ANDROID_NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64")
+# Determine NDK path based on environment variable or default location
+if(DEFINED ENV{ANDROID_NDK_HOME})
+    set(ANDROID_NDK_PATH "$ENV{ANDROID_NDK_HOME}")
+elseif(WIN32)
+    set(ANDROID_NDK_PATH "$ENV{USERPROFILE}/android-ndk-r23b")
+else()
+    set(ANDROID_NDK_PATH "$ENV{HOME}/android-ndk-r23b")
+endif()
 
-set(CMAKE_C_COMPILER "${TOOLCHAIN}/bin/x86_64-linux-android22-clang")
-set(CMAKE_CXX_COMPILER "${TOOLCHAIN}/bin/x86_64-linux-android22-clang++")
-set(C_COMPILER "${TOOLCHAIN}/bin/clang")
+# Determine host platform for prebuilt tools
+if(WIN32)
+    set(HOST_TAG "windows-x86_64")
+    set(EXE_SUFFIX ".exe")
+    set(CMD_SUFFIX ".cmd")
+else()
+    set(HOST_TAG "linux-x86_64")
+    set(EXE_SUFFIX "")
+    set(CMD_SUFFIX "")
+endif()
+
+set(TOOLCHAIN "${ANDROID_NDK_PATH}/toolchains/llvm/prebuilt/${HOST_TAG}")
+
+set(CMAKE_C_COMPILER "${TOOLCHAIN}/bin/x86_64-linux-android22-clang${CMD_SUFFIX}")
+set(CMAKE_CXX_COMPILER "${TOOLCHAIN}/bin/x86_64-linux-android22-clang++${CMD_SUFFIX}")
+set(C_COMPILER "${TOOLCHAIN}/bin/clang${EXE_SUFFIX}")
 
 set(CMDLINE_SOURCE cmdline.c)
 set(HANDLE_SOURCE main.cpp)
