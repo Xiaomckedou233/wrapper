@@ -49,15 +49,18 @@ jobs:
       - name: Verify build outputs
         run: |
           Write-Host "Checking for build outputs..."
+          Write-Host "Current directory: $(Get-Location)"
+          Write-Host "Listing files:"
+          Get-ChildItem -Path . -File
           if (Test-Path "rootfs\system\bin\main") {
-            Write-Host "main binary found"
+            Write-Host "✓ main binary found in rootfs\system\bin\"
           } else {
-            Write-Host "Warning: main binary not found"
+            Write-Host "✗ Warning: main binary not found in rootfs\system\bin\"
           }
           if (Test-Path "wrapper.exe") {
-            Write-Host "wrapper.exe binary found"
+            Write-Host "✓ wrapper.exe binary found"
           } else {
-            Write-Host "Warning: wrapper.exe binary not found"
+            Write-Host "✗ Warning: wrapper.exe binary not found"
           }
 
       - name: Set outputs
@@ -77,16 +80,16 @@ jobs:
             Dockerfile
 
       - name: Create Release Zip File
-        if: matrix.build_type == 'Release'
+        if: matrix.build_type == 'Release' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           Compress-Archive -Path rootfs\, wrapper.exe, Dockerfile -DestinationPath Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}.zip
 
       - name: Create Release
-        if: matrix.build_type == 'Release'
+        if: matrix.build_type == 'Release' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           files: Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}.zip
-          body: ${{ github.event.head_commit.message }}
+          body: ${{ github.event.head_commit.message || 'Windows build release' }}
           name: Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}
           tag_name: Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}
           make_latest: false
