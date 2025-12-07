@@ -44,6 +44,11 @@ include(ExternalProject)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_CXX_STANDARD 11)
 
+# When cross-compiling for Android on Windows, ensure CMake looks for .so files
+if(CMAKE_HOST_WIN32 AND CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".so" ".a")
+endif()
+
 set(CMDLINE_SOURCE cmdline.c)
 set(HANDLE_SOURCE main.cpp)
 set(CJSON_SOURCE cjson/cjson.c)
