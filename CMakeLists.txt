@@ -2,12 +2,17 @@ cmake_minimum_required(VERSION 3.25)
 
 # Determine NDK path based on environment variable or default location
 # This must be set before project() to properly configure cross-compilation
-if(DEFINED ENV{ANDROID_NDK_HOME})
-    set(ANDROID_NDK_PATH "$ENV{ANDROID_NDK_HOME}")
-elseif(CMAKE_HOST_WIN32)
-    set(ANDROID_NDK_PATH "$ENV{USERPROFILE}/android-ndk-r23b")
-else()
-    set(ANDROID_NDK_PATH "$ENV{HOME}/android-ndk-r23b")
+# Prioritize explicit ANDROID_NDK_PATH cache variable, then default paths
+if(NOT DEFINED ANDROID_NDK_PATH)
+    if(CMAKE_HOST_WIN32)
+        set(ANDROID_NDK_PATH "$ENV{USERPROFILE}/android-ndk-r23b")
+    else()
+        set(ANDROID_NDK_PATH "$ENV{HOME}/android-ndk-r23b")
+    endif()
+    # Only use ANDROID_NDK_HOME if the default path doesn't exist
+    if(DEFINED ENV{ANDROID_NDK_HOME} AND NOT EXISTS "${ANDROID_NDK_PATH}")
+        set(ANDROID_NDK_PATH "$ENV{ANDROID_NDK_HOME}")
+    endif()
 endif()
 
 # Determine host platform for prebuilt tools

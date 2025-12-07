@@ -39,11 +39,17 @@ jobs:
         with:
           cmake-version: '3.25.x'
 
+      - name: Install Ninja
+        run: |
+          choco install ninja -y
+
       - name: Configure CMake
         run: |
           mkdir build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          $ndkPath = "$env:USERPROFILE\android-ndk-r23b"
+          Write-Host "Using NDK at: $ndkPath"
+          cmake .. -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DANDROID_NDK_PATH="$ndkPath"
 
       - name: Build
         run: |
