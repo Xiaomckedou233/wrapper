@@ -1,22 +1,17 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(wrapper)
-include(ExternalProject)
-
-set(CMAKE_C_STANDARD 99)
-set(CMAKE_CXX_STANDARD 11)
-
 # Determine NDK path based on environment variable or default location
+# This must be set before project() to properly configure cross-compilation
 if(DEFINED ENV{ANDROID_NDK_HOME})
     set(ANDROID_NDK_PATH "$ENV{ANDROID_NDK_HOME}")
-elseif(WIN32)
+elseif(CMAKE_HOST_WIN32)
     set(ANDROID_NDK_PATH "$ENV{USERPROFILE}/android-ndk-r23b")
 else()
     set(ANDROID_NDK_PATH "$ENV{HOME}/android-ndk-r23b")
 endif()
 
 # Determine host platform for prebuilt tools
-if(WIN32)
+if(CMAKE_HOST_WIN32)
     set(HOST_TAG "windows-x86_64")
     set(EXE_SUFFIX ".exe")
     set(CMD_SUFFIX ".cmd")
@@ -28,9 +23,21 @@ endif()
 
 set(TOOLCHAIN "${ANDROID_NDK_PATH}/toolchains/llvm/prebuilt/${HOST_TAG}")
 
+# Set compilers before project() to ensure cross-compilation is properly configured
 set(CMAKE_C_COMPILER "${TOOLCHAIN}/bin/x86_64-linux-android22-clang${CMD_SUFFIX}")
 set(CMAKE_CXX_COMPILER "${TOOLCHAIN}/bin/x86_64-linux-android22-clang++${CMD_SUFFIX}")
 set(C_COMPILER "${TOOLCHAIN}/bin/clang${EXE_SUFFIX}")
+
+# Set system name for cross-compilation
+set(CMAKE_SYSTEM_NAME Android)
+set(CMAKE_SYSTEM_VERSION 22)
+set(CMAKE_ANDROID_ARCH_ABI x86_64)
+
+project(wrapper)
+include(ExternalProject)
+
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_CXX_STANDARD 11)
 
 set(CMDLINE_SOURCE cmdline.c)
 set(HANDLE_SOURCE main.cpp)
@@ -49,12 +56,12 @@ set_target_properties(main PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/rootfs/system/bin"
 )
 
-find_library(ANDROIDAPPMUSIC_LIB androidappmusic PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64)
-find_library(STORESERVICESCORE_LIB storeservicescore PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64)
-find_library(MEDIAPLATFORM_LIB mediaplatform PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64)
-find_library(CXX_SHARED_LIB c++_shared PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64)
-find_library(CURL_SHARED_LIB curl PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64)
-find_library(LOG_SHARED_LIB log PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64)
+find_library(ANDROIDAPPMUSIC_LIB androidappmusic PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64 NO_DEFAULT_PATH)
+find_library(STORESERVICESCORE_LIB storeservicescore PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64 NO_DEFAULT_PATH)
+find_library(MEDIAPLATFORM_LIB mediaplatform PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64 NO_DEFAULT_PATH)
+find_library(CXX_SHARED_LIB c++_shared PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64 NO_DEFAULT_PATH)
+find_library(CURL_SHARED_LIB curl PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64 NO_DEFAULT_PATH)
+find_library(LOG_SHARED_LIB log PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64 NO_DEFAULT_PATH)
 
 # Link libraries
 target_link_libraries(main
@@ -79,8 +86,8 @@ endif()
 
 link_directories(${CMAKE_SOURCE_DIR}/rootfs/system/lib64)
 
-# Determine wrapper output name based on platform
-if(WIN32)
+# Determine wrapper output name based on host platform
+if(CMAKE_HOST_WIN32)
     set(WRAPPER_OUTPUT "wrapper.exe")
 else()
     set(WRAPPER_OUTPUT "wrapper")
