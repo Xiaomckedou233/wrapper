@@ -54,10 +54,10 @@ jobs:
         } else {
           Write-Host "Warning: main binary not found"
         }
-        if (Test-Path "wrapper") {
-          Write-Host "wrapper binary found"
+        if (Test-Path "wrapper.exe") {
+          Write-Host "wrapper.exe binary found"
         } else {
-          Write-Host "Warning: wrapper binary not found"
+          Write-Host "Warning: wrapper.exe binary not found"
         }
 
     - name: Set outputs
@@ -73,13 +73,13 @@ jobs:
         include-hidden-files: true
         path: |
           rootfs
-          wrapper
+          wrapper.exe
           Dockerfile
 
     - name: Create Release Zip File
       if: matrix.build_type == 'Release'
       run: |
-        Compress-Archive -Path rootfs\, wrapper, Dockerfile -DestinationPath Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}.zip
+        Compress-Archive -Path rootfs\, wrapper.exe, Dockerfile -DestinationPath Wrapper.Windows.x86_64.${{ matrix.build_type }}.${{ steps.vars.outputs.sha_short }}.zip
       
     - name: Create Release
       if: matrix.build_type == 'Release'

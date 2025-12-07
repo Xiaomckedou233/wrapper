@@ -79,12 +79,19 @@ endif()
 
 link_directories(${CMAKE_SOURCE_DIR}/rootfs/system/lib64)
 
+# Determine wrapper output name based on platform
+if(WIN32)
+    set(WRAPPER_OUTPUT "wrapper.exe")
+else()
+    set(WRAPPER_OUTPUT "wrapper")
+endif()
+
 ExternalProject_Add(
     wrapper
     PREFIX ${CMAKE_BINARY_DIR}
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND ${C_COMPILER} -O3 -Wall -o wrapper ${WRAPPER_SOURCE} ${CMAKE_CURRENT_SOURCE_DIR}/cmdline.c
+    BUILD_COMMAND ${C_COMPILER} -O3 -Wall -o ${WRAPPER_OUTPUT} ${WRAPPER_SOURCE} ${CMAKE_CURRENT_SOURCE_DIR}/cmdline.c
     BUILD_IN_SOURCE 1
     INSTALL_COMMAND ""
     DEPENDS main
