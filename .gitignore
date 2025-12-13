@@ -90,3 +90,4 @@ rootfs/
 wrapper
 rootfs/system/bin/linker64
 build/
+android-ndk-r23b

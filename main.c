@@ -36,12 +36,116 @@ static char *g_storefront_id = NULL;
 static char *g_dev_token = NULL;
 static char *g_music_token = NULL;
 
+// API Globals
+pthread_mutex_t api_mutex = PTHREAD_MUTEX_INITIALIZER;
+static char *g_req_music_token = NULL;
+static char *g_req_storefront_id = NULL;
+
+struct curl_slist {
+    char *data;
+    struct curl_slist *next;
+};
+
+struct curl_slist *slist_append(struct curl_slist *list, const char *string) {
+    struct curl_slist *new_item = malloc(sizeof(struct curl_slist));
+    new_item->next = NULL;
+    new_item->data = strdup(string);
+    
+    if (!list) return new_item;
+    
+    struct curl_slist *ptr = list;
+    while (ptr->next) ptr = ptr->next;
+    ptr->next = new_item;
+    return list;
+}
+
+void slist_free_all(struct curl_slist *list) {
+    struct curl_slist *ptr = list;
+    while (ptr) {
+        struct curl_slist *next = ptr->next;
+        free(ptr->data);
+        free(ptr);
+        ptr = next;
+    }
+}
+
+static const char base64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+char *base64_encode(const unsigned char *data, size_t input_length, size_t *output_length) {
+    *output_length = 4 * ((input_length + 2) / 3);
+    char *encoded_data = malloc(*output_length + 1);
+    if (encoded_data == NULL) return NULL;
+
+    for (size_t i = 0, j = 0; i < input_length;) {
+        uint32_t octet_a = i < input_length ? (unsigned char)data[i++] : 0;
+        uint32_t octet_b = i < input_length ? (unsigned char)data[i++] : 0;
+        uint32_t octet_c = i < input_length ? (unsigned char)data[i++] : 0;
+
+        uint32_t triple = (octet_a << 0x10) + (octet_b << 0x08) + octet_c;
+
+        encoded_data[j++] = base64_table[(triple >> 3 * 6) & 0x3F];
+        encoded_data[j++] = base64_table[(triple >> 2 * 6) & 0x3F];
+        encoded_data[j++] = base64_table[(triple >> 1 * 6) & 0x3F];
+        encoded_data[j++] = base64_table[(triple >> 0 * 6) & 0x3F];
+    }
+
+    for (int i = 0; i < (3 - input_length % 3) % 3; i++)
+        encoded_data[*output_length - 1 - i] = '=';
+
+    encoded_data[*output_length] = '\0';
+    return encoded_data;
+}
+
+unsigned char *base64_decode(const char *data, size_t input_length, size_t *output_length) {
+    if (input_length % 4 != 0) return NULL;
+
+    *output_length = input_length / 4 * 3;
+    if (data[input_length - 1] == '=') (*output_length)--;
+    if (data[input_length - 2] == '=') (*output_length)--;
+
+    unsigned char *decoded_data = malloc(*output_length);
+    if (decoded_data == NULL) return NULL;
+
+    int decoding_table[256];
+    for (int i = 0; i < 256; i++) decoding_table[i] = -1;
+    for (int i = 0; i < 64; i++) decoding_table[(unsigned char)base64_table[i]] = i;
+
+    for (size_t i = 0, j = 0; i < input_length;) {
+        uint32_t sextet_a = data[i] == '=' ? 0 & i++ : decoding_table[(unsigned char)data[i++]];
+        uint32_t sextet_b = data[i] == '=' ? 0 & i++ : decoding_table[(unsigned char)data[i++]];
+        uint32_t sextet_c = data[i] == '=' ? 0 & i++ : decoding_table[(unsigned char)data[i++]];
+        uint32_t sextet_d = data[i] == '=' ? 0 & i++ : decoding_table[(unsigned char)data[i++]];
+
+        uint32_t triple = (sextet_a << 3 * 6) + (sextet_b << 2 * 6) + (sextet_c << 1 * 6) + (sextet_d << 0 * 6);
+
+        if (j < *output_length) decoded_data[j++] = (triple >> 2 * 8) & 0xFF;
+        if (j < *output_length) decoded_data[j++] = (triple >> 1 * 8) & 0xFF;
+        if (j < *output_length) decoded_data[j++] = (triple >> 0 * 8) & 0xFF;
+    }
+
+    return decoded_data;
+}
+
 #ifndef MyRelease
 int32_t CURLOPT_SSL_VERIFYPEER = 64;
 int32_t CURLOPT_SSL_VERIFYHOST = 81;
 int32_t CURLOPT_PINNEDPUBLICKEY = 10230;
 
 subhook_t curl_hook;
+subhook_t curl_perform_hook;
+struct curl_slist *g_injected_headers = NULL;
+
+void *curl_easy_perform_hook(void *curl) {
+    subhook_remove(curl_perform_hook);
+    void *ret = curl_easy_perform(curl);
+    subhook_install(curl_perform_hook);
+    
+    if (g_injected_headers) {
+        slist_free_all(g_injected_headers);
+        g_injected_headers = NULL;
+    }
+    return ret;
+}
 
 void curl_easy_setopt_hook(void *curl, int32_t option, ...) {
     va_list args;
@@ -54,7 +158,34 @@ void curl_easy_setopt_hook(void *curl, int32_t option, ...) {
         option == CURLOPT_SSL_VERIFYHOST || 
         option == CURLOPT_PINNEDPUBLICKEY) {
         curl_easy_setopt(curl, option, 0L);
-        printf("[+] hooked curl_easy_setopt %d\n", option);
+        // printf("[+] hooked curl_easy_setopt %d\n", option);
+    } else if (option == 10023) { // CURLOPT_HTTPHEADER
+        struct curl_slist *list = (struct curl_slist *)param;
+        if (g_req_music_token) {
+             struct curl_slist *new_list = NULL;
+             struct curl_slist *ptr = list;
+             while (ptr) {
+                 new_list = slist_append(new_list, ptr->data);
+                 ptr = ptr->next;
+             }
+             
+             char buf[1024];
+             snprintf(buf, sizeof(buf), "media-user-token: %s", g_req_music_token);
+             new_list = slist_append(new_list, buf);
+             
+             if (g_req_storefront_id) {
+                 snprintf(buf, sizeof(buf), "X-Apple-Store-Front: %s", g_req_storefront_id);
+                 new_list = slist_append(new_list, buf);
+             }
+             
+             if (g_injected_headers) {
+                 slist_free_all(g_injected_headers);
+             }
+             g_injected_headers = new_list;
+             curl_easy_setopt(curl, option, new_list);
+        } else {
+            curl_easy_setopt(curl, option, param);
+        }
     } else {
         curl_easy_setopt(curl, option, param);
     }
@@ -376,48 +507,6 @@ static inline struct shared_ptr init_ctx() {
 extern void *endLeaseCallback;
 extern void *pbErrCallback;
 
-inline static uint8_t login(struct shared_ptr reqCtx) {
-    fprintf(stderr, "[+] logging in...\n");
-    if (file_exists(strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID"))) {
-        remove(strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID"));
-    }
-    if (file_exists(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"))) {
-        remove(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"));
-    }
-    struct shared_ptr flow;
-    _ZNSt6__ndk110shared_ptrIN17storeservicescore16AuthenticateFlowEE11make_sharedIJRNS0_INS1_14RequestContextEEEEEES3_DpOT_(
-        &flow, &reqCtx);
-    _ZN17storeservicescore16AuthenticateFlow3runEv(flow.obj);
-    struct shared_ptr *resp =
-        _ZNK17storeservicescore16AuthenticateFlow8responseEv(flow.obj);
-    if (resp == NULL || resp->obj == NULL)
-        return 0;
-    const int respType =
-        _ZNK17storeservicescore20AuthenticateResponse12responseTypeEv(
-            resp->obj);
-    fprintf(stderr, "[.] response type %d\n", respType);
-    return respType == 6;
-    // struct shared_ptr subStatMgr;
-    // _ZN20androidstoreservices30SVSubscriptionStatusMgrFactory6createEv(&subStatMgr);
-    // struct shared_ptr data;
-    // int method = 2;
-    // _ZN20androidstoreservices27SVSubscriptionStatusMgrImpl33checkSubscriptionStatusFromSourceERKNSt6__ndk110shared_ptrIN17storeservicescore14RequestContextEEERKNS_23SVSubscriptionStatusMgr26SVSubscriptionStatusSourceE(&data,
-    // subStatMgr.obj, &reqCtx, &method);
-    // return 1;
-}
-
-static inline uint8_t readfull(const int connfd, void *const buf,
-                               const size_t size) {
-    size_t red = 0;
-    while (size > red) {
-        const ssize_t b = read(connfd, ((uint8_t *)buf) + red, size - red);
-        if (b <= 0)
-            return 0;
-        red += b;
-    }
-    return 1;
-}
-
 static inline void writefull(const int connfd, void *const buf,
                              const size_t size) {
     size_t red = 0;
@@ -484,57 +573,97 @@ void refresh_decrypt_ctx() {
 }
 
 void handle(const int connfd) {
-    while (1) {
-        uint8_t adamSize;
-        if (!readfull(connfd, &adamSize, sizeof(uint8_t)))
-            return;
-        if (adamSize <= 0)
-            return;
+    char buffer[4096];
+    ssize_t n = read(connfd, buffer, sizeof(buffer) - 1);
+    if (n <= 0) return;
+    buffer[n] = '\0';
 
-        char adam[adamSize + 1];
-        if (!readfull(connfd, adam, adamSize))
-            return;
-        adam[adamSize] = '\0';
-
-        uint8_t uri_size;
-        if (!readfull(connfd, &uri_size, sizeof(uint8_t)))
-            return;
-
-        char uri[uri_size + 1];
-        if (!readfull(connfd, uri, uri_size))
-            return;
-        uri[uri_size] = '\0';
-
-        void **const kdContext = getKdContext(adam, uri);
-        if (kdContext == NULL)
-            return;
-
-        while (1) {
-            uint32_t size;
-            if (!readfull(connfd, &size, sizeof(uint32_t))) {
-                perror("read");
-                return;
-            }
-
-            if (size <= 0)
-                break;
-
-            void *sample = malloc(size);
-            if (sample == NULL) {
-                perror("malloc");
-                return;
-            }
-            if (!readfull(connfd, sample, size)) {
-                free(sample);
-                perror("read");
-                return;
-            }
-
-            NfcRKVnxuKZy04KWbdFu71Ou(*kdContext, 5, sample, sample, size);
-            writefull(connfd, sample, size);
-            free(sample);
-        }
+    // Check for POST
+    if (strncmp(buffer, "POST", 4) != 0) {
+        const char *resp = "HTTP/1.1 405 Method Not Allowed\r\n\r\n";
+        writefull(connfd, (void *)resp, strlen(resp));
+        return;
     }
+
+    // Find body
+    char *body = strstr(buffer, "\r\n\r\n");
+    if (!body) {
+        const char *resp = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        writefull(connfd, (void *)resp, strlen(resp));
+        return;
+    }
+    body += 4;
+
+    cJSON *json = cJSON_Parse(body);
+    if (!json) {
+        const char *resp = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        writefull(connfd, (void *)resp, strlen(resp));
+        return;
+    }
+
+    cJSON *adamIdItem = cJSON_GetObjectItemCaseSensitive(json, "adamId");
+    cJSON *uriItem = cJSON_GetObjectItemCaseSensitive(json, "uri");
+    cJSON *tokenItem = cJSON_GetObjectItemCaseSensitive(json, "token");
+    cJSON *storefrontItem = cJSON_GetObjectItemCaseSensitive(json, "storefront");
+    cJSON *dataItem = cJSON_GetObjectItemCaseSensitive(json, "data");
+
+    if (!cJSON_IsString(adamIdItem) || !cJSON_IsString(uriItem) || !cJSON_IsString(tokenItem) || !cJSON_IsString(dataItem)) {
+        cJSON_Delete(json);
+        const char *resp = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        writefull(connfd, (void *)resp, strlen(resp));
+        return;
+    }
+
+    size_t sample_size = 0;
+    unsigned char *sample = base64_decode(dataItem->valuestring, strlen(dataItem->valuestring), &sample_size);
+    if (!sample) {
+        cJSON_Delete(json);
+        const char *resp = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        writefull(connfd, (void *)resp, strlen(resp));
+        return;
+    }
+
+    pthread_mutex_lock(&api_mutex);
+    g_req_music_token = tokenItem->valuestring;
+    if (cJSON_IsString(storefrontItem)) {
+        g_req_storefront_id = storefrontItem->valuestring;
+    } else {
+        g_req_storefront_id = NULL;
+    }
+
+    void **const kdContext = getKdContext(adamIdItem->valuestring, uriItem->valuestring);
+    
+    if (kdContext != NULL) {
+        NfcRKVnxuKZy04KWbdFu71Ou(*kdContext, 5, sample, sample, sample_size);
+    }
+
+    g_req_music_token = NULL;
+    g_req_storefront_id = NULL;
+    pthread_mutex_unlock(&api_mutex);
+
+    cJSON_Delete(json);
+
+    if (kdContext != NULL) {
+        size_t encoded_size = 0;
+        char *encoded_sample = base64_encode(sample, sample_size, &encoded_size);
+        
+        cJSON *respJson = cJSON_CreateObject();
+        cJSON_AddStringToObject(respJson, "data", encoded_sample);
+        char *respStr = cJSON_PrintUnformatted(respJson);
+        
+        char header[512];
+        snprintf(header, sizeof(header), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n", strlen(respStr));
+        writefull(connfd, (void *)header, strlen(header));
+        writefull(connfd, (void *)respStr, strlen(respStr));
+        
+        free(respStr);
+        cJSON_Delete(respJson);
+        free(encoded_sample);
+    } else {
+        const char *resp = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+        writefull(connfd, (void *)resp, strlen(resp));
+    }
+    free(sample);
 }
 
 extern uint8_t handle_cpp(int);
@@ -674,41 +803,87 @@ const char* get_m3u8_method_play(uint8_t leaseMgr[16], unsigned long adam) {
 }
 
 void handle_m3u8(const int connfd) {
-    while (1)
-    {
-        uint8_t adamSize;
-        if (!readfull(connfd, &adamSize, sizeof(uint8_t))) {
-            return;
-        }
-        if (adamSize <= 0) {
-            return;
-        }
-        char adam[adamSize];
-        for (int i=0; i<adamSize; i=i+1) {
-            readfull(connfd, &adam[i], sizeof(uint8_t));
-        }
-        char *ptr;
-        unsigned long adamID = strtoul(adam, &ptr, 10);
-        const char *m3u8;
-        if (offlineFlag) {
-            m3u8 = get_m3u8_method_download(reqCtx, adamID);
-        } else {
-            m3u8 = get_m3u8_method_play(leaseMgr, adamID);
-        }
-        if (m3u8 == NULL) {
-            fprintf(stderr, "[.] failed to get m3u8 of adamId: %ld\n", adamID);
-            writefull(connfd, "\n", sizeof("\n"));
-        } else {
-            fprintf(stderr, "[.] m3u8 adamId: %ld, url: %s\n", adamID, m3u8);
-            char *with_newline = malloc(strlen(m3u8) + 2);
-            if (with_newline) {
-                strcpy(with_newline, m3u8);
-                strcat(with_newline, "\n");
-                writefull(connfd, with_newline, strlen(with_newline));
-                free(with_newline);
-            }
-            free((void *)m3u8);
-        }
+    char buffer[4096];
+    ssize_t n = read(connfd, buffer, sizeof(buffer) - 1);
+    if (n <= 0) return;
+    buffer[n] = '\0';
+
+    // Check for POST
+    if (strncmp(buffer, "POST", 4) != 0) {
+        const char *resp = "HTTP/1.1 405 Method Not Allowed\r\n\r\n";
+        writefull(connfd, (void *)resp, strlen(resp));
+        return;
+    }
+
+    // Find body
+    char *body = strstr(buffer, "\r\n\r\n");
+    if (!body) {
+        const char *resp = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        writefull(connfd, (void *)resp, strlen(resp));
+        return;
+    }
+    body += 4;
+
+    cJSON *json = cJSON_Parse(body);
+    if (!json) {
+        const char *resp = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        writefull(connfd, (void *)resp, strlen(resp));
+        return;
+    }
+
+    cJSON *adamIdItem = cJSON_GetObjectItemCaseSensitive(json, "adamId");
+    cJSON *tokenItem = cJSON_GetObjectItemCaseSensitive(json, "token");
+    cJSON *storefrontItem = cJSON_GetObjectItemCaseSensitive(json, "storefront");
+    cJSON *actionItem = cJSON_GetObjectItemCaseSensitive(json, "action"); // "play" or "download"
+
+    if (!cJSON_IsString(adamIdItem) || !cJSON_IsString(tokenItem)) {
+        cJSON_Delete(json);
+        const char *resp = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        writefull(connfd, (void *)resp, strlen(resp));
+        return;
+    }
+
+    unsigned long adamID = strtoul(adamIdItem->valuestring, NULL, 10);
+    
+    pthread_mutex_lock(&api_mutex);
+    g_req_music_token = tokenItem->valuestring;
+    if (cJSON_IsString(storefrontItem)) {
+        g_req_storefront_id = storefrontItem->valuestring;
+    } else {
+        g_req_storefront_id = NULL;
+    }
+
+    const char *m3u8 = NULL;
+    int is_download = (actionItem && cJSON_IsString(actionItem) && strcmp(actionItem->valuestring, "download") == 0);
+    
+    if (is_download) {
+        m3u8 = get_m3u8_method_download(reqCtx, adamID);
+    } else {
+        m3u8 = get_m3u8_method_play(leaseMgr, adamID);
+    }
+
+    g_req_music_token = NULL;
+    g_req_storefront_id = NULL;
+    pthread_mutex_unlock(&api_mutex);
+
+    cJSON_Delete(json);
+
+    if (m3u8) {
+        cJSON *respJson = cJSON_CreateObject();
+        cJSON_AddStringToObject(respJson, "url", m3u8);
+        char *respStr = cJSON_PrintUnformatted(respJson);
+        
+        char header[512];
+        snprintf(header, sizeof(header), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n", strlen(respStr));
+        writefull(connfd, (void *)header, strlen(header));
+        writefull(connfd, (void *)respStr, strlen(respStr));
+        
+        free(respStr);
+        cJSON_Delete(respJson);
+        free((void *)m3u8);
+    } else {
+        const char *resp = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
+        writefull(connfd, (void *)resp, strlen(resp));
     }
 }
 
@@ -810,59 +985,6 @@ void handle_account(const int connfd)
 
     free(http_response);
     free(json_body);
-}
-
-static inline void *new_socket_account(void *args)
-{
-    const int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
-    if (fd == -1)
-    {
-        perror("socket");
-        return NULL;
-    }
-    const int optval = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
-
-    static struct sockaddr_in serv_addr = {.sin_family = AF_INET};
-    inet_pton(AF_INET, args_info.host_arg, &serv_addr.sin_addr);
-    serv_addr.sin_port = htons(args_info.account_port_arg);
-    if (bind(fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) == -1)
-    {
-        perror("bind");
-        return NULL;
-    }
-
-    if (listen(fd, 5) == -1)
-    {
-        perror("listen");
-        return NULL;
-    }
-
-    fprintf(stderr, "[!] listening account info request on %s:%d\n", args_info.host_arg, args_info.account_port_arg);
-
-    static struct sockaddr_in peer_addr;
-    static socklen_t peer_addr_size = sizeof(peer_addr);
-    while (1)
-    {
-        const int connfd = accept4(fd, (struct sockaddr *)&peer_addr,
-                                   &peer_addr_size, SOCK_CLOEXEC);
-        if (connfd == -1)
-        {
-            if (errno == ENETDOWN || errno == EPROTO || errno == ENOPROTOOPT ||
-                errno == EHOSTDOWN || errno == ENONET ||
-                errno == EHOSTUNREACH || errno == EOPNOTSUPP ||
-                errno == ENETUNREACH)
-                continue;
-            perror("accept4");
-        }
-
-        handle_account(connfd);
-
-        if (close(connfd) == -1)
-        {
-            perror("close");
-        }
-    }
 }
 
 char* get_account_storefront_id(struct shared_ptr reqCtx) {
@@ -1034,20 +1156,15 @@ int main(int argc, char *argv[]) {
     subhook_install(subhook_new(_ZN13mediaplatform26DebugLogEnabledForPriorityENS_11LogPriorityE, allDebug, SUBHOOK_64BIT_OFFSET));
     curl_hook = subhook_new(curl_easy_setopt, curl_easy_setopt_hook, SUBHOOK_64BIT_OFFSET);
     subhook_install(curl_hook);
+    curl_perform_hook = subhook_new(curl_easy_perform, curl_easy_perform_hook, SUBHOOK_64BIT_OFFSET);
+    subhook_install(curl_perform_hook);
     subhook_install(subhook_new(__android_log_print, android_log_print_hook, SUBHOOK_64BIT_OFFSET));
     subhook_install(subhook_new(__android_log_write, android_log_write_hook, SUBHOOK_64BIT_OFFSET));
     #endif
 
     init();
     reqCtx = init_ctx();
-    if (args_info.login_given) {
-        amUsername = strtok(args_info.login_arg, ":");
-        amPassword = strtok(NULL, ":");
-    }
-    if (args_info.login_given && !login(reqCtx)) {
-        fprintf(stderr, "[!] login failed\n");
-        return EXIT_FAILURE;
-    }
+    
     _ZN22SVPlaybackLeaseManagerC2ERKNSt6__ndk18functionIFvRKiEEERKNS1_IFvRKNS0_10shared_ptrIN17storeservicescore19StoreErrorConditionEEEEEE(
         leaseMgr, &endLeaseCallback, &pbErrCallback);
     uint8_t autom = 1;
@@ -1060,22 +1177,9 @@ int main(int argc, char *argv[]) {
         printf("[+] This account supports offline channel\n");
     }
 
-    // Cache account info
-    g_storefront_id = get_account_storefront_id(reqCtx);
-    g_dev_token = get_dev_token(reqCtx);
-    g_music_token = get_music_user_token(get_guid(), g_dev_token, reqCtx);
-    fprintf(stderr, "[+] account info cached successfully\n");
-
-    write_storefront_id();
-    write_music_token();
-
     pthread_t m3u8_thread;
     pthread_create(&m3u8_thread, NULL, &new_socket_m3u8, NULL);
     pthread_detach(m3u8_thread);
-
-    pthread_t account_thread;
-    pthread_create(&account_thread, NULL, &new_socket_account, NULL);
-    pthread_detach(account_thread);
 
     return new_socket();
 }
